@@ -28,10 +28,10 @@ def main_iter_files():
     output_path = '/people/maurice/ownCloud/outputGentle/'
     wordsTimeds = []
     for file in sorted(glob.glob(output_path + '*')):
-        print(file)
+        #print(file)
         if 'wordsTimed' in file and 'pickle' not in file:
             wordsTimed = pd.read_csv(file)  # load(file)
-            print(wordsTimed.head())
+            #print(wordsTimed.head())
             wordsTimeds.append(wordsTimed)
             # wordsTimedGby = wordsTimed.groupby('idSentence')
             '''sentenceTimed = wordsTimedGby.apply(lambda x: x.count())
@@ -89,7 +89,7 @@ def analogy(w1, w2, w3, n=5, filter_given=True):
     print_tuples(closest_words[:n])
 
 def process_one_file(i, wt):
-    print(i)
+    #print(i)
     sentencesTimed = pd.DataFrame(columns=['speaker', 'sentence_courante'])    
 
     st = sentenceTimed(wt)
@@ -112,7 +112,7 @@ def load_data():
     # Lent
     #punctuation_end_sentence = ['!', '.', '?']
     #sentencesTimeds = []
-    print(len(wts))
+    #print(len(wts))
 
     # parallel code
     sentencesTimeds = Parallel(n_jobs=-1)(delayed(process_one_file)(i, wt) for i, wt in enumerate(wts))
