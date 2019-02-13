@@ -28,10 +28,20 @@ class HierarchicalBiLSTM_on_sentence_embedding(nn.Module):
 
         # The LSTM takes word embeddings as inputs, and outputs hidden states
         # with dimensionality hidden_dim.
+        self.lstm_sentence = torch.nn.LSTM(input_size=embedding_dim, hidden_size=hidden_dim, num_layers=num_layers, batch_first=False, bidirectional=bidirectional)
+        self.lstm_sentence = self.lstm_sentence.to(device)
         self.lstm_previous = torch.nn.LSTM(input_size=embedding_dim, hidden_size=hidden_dim, num_layers=num_layers, batch_first=False, bidirectional=bidirectional)
         self.lstm_previous = self.lstm_previous.to(device)
         self.lstm_future = torch.nn.LSTM(input_size=embedding_dim, hidden_size=hidden_dim, num_layers=num_layers, batch_first=False, bidirectional=bidirectional)
         self.lstm_future = self.lstm_future.to(device)
+        
+        # Attention Layer
+        self.attn_previous = nn.Linear(hidden_dim,hidden_linear_size)
+        self.alpha_previous = nn.Linear(hidden_linear_size,1)
+        self.attn_future = nn.Linear(hidden_dim,hidden_linear_size)
+        self.alpha_future = nn.Linear(hidden_linear_size,1)
+        self.tanh = nn.Tanh()
+        self.softmax = nn.Softmax()
         
         # Hidden state to hidden state
         self.linear_layers = []
@@ -42,25 +52,49 @@ class HierarchicalBiLSTM_on_sentence_embedding(nn.Module):
         # The linear layer that maps from hidden state space to tag space
         self.hidden2tag = nn.Linear(2*self.num_directions*hidden_dim, targset_size, bias=True)#2 because we concatenate the both output of the lstm
         self.hidden2tag = self.hidden2tag.to(device)
+        self.hidden_sentences = self.init_hidden()
         self.hidden = self.init_hidden()
 
-    def init_hidden(self):
+    def init_hidden(self, batch_size=1):
         # Before we've done anything, we dont have any hidden state.
         # Refer to the Pytorch documentation to see exactly
         # why they have this dimensionality.
         # The axes semantics are (num_layers, minibatch_size, hidden_dim)
-        return (torch.zeros(self.num_layers, 1, self.hidden_dim, device=self.device, requires_grad=False), torch.zeros(self.num_layers, 1, self.hidden_dim, device=self.device, requires_grad=False))
+        return (torch.zeros(self.num_layers*self.num_directions, batch_size, self.hidden_dim, device=self.device), torch.zeros(self.num_layers*self.num_directions, batch_size, self.hidden_dim, device=self.device))#, requires_grad=False))
+    
+    def attention_vector(seq_tensor_output_p, seq_tensor_output_f, previous=True):
+        similarity = torch.cat((seq_tensor_output_p[-1,:,:].repeat(seq_tensor_output_f.shape[0],1,1), seq_tensor_output_f[:,:,:]), 2)
+        if previous:
+            similarity_ = self.tanh(self.attn_previous(similarity))
+            alpha_ = self.alpha_previous(similarity_).squeeze()
+        else:
+            similarity_ = self.tanh(self.attn_future(similarity))
+            alpha_ = self.alpha_future(similarity_).squeeze()
+        alpha_ = self.softmax(alpha_)
+        m = torch.matmul(seq_tensor_output_future.transpose(0,2), alpha_).transpose(0,1)
+        return m
 
-    def forward(self, input_previous_sentences, input_future_sentences):
+    def forward(self, sentences_emb):
+        sentences_embedding, self.hidden_sentences = self.lstm_sentence(sentences_emb, self.hidden_sentences)
+        input_previous_sentences = sentences_embedding[-1,:,:].unsqueeze(1)[:int(sentences_emb.shape[1]/2),:,:]
+        input_future_sentences = sentences_embedding[-1,:,:].unsqueeze(1)[int(sentences_emb.shape[1]/2):,:,:]
+        
         seq_tensor_output_previous, _ = self.lstm_previous(input_previous_sentences, self.hidden)
         seq_tensor_output_future, _ = self.lstm_future(input_future_sentences, self.hidden)
         
         seq_len = input_previous_sentences.shape[0]
         batch = input_previous_sentences.shape[1]
 
-        seq_tensor_output_sum = torch.cat((seq_tensor_output_previous.view(seq_len, batch, self.num_directions, self.hidden_dim)[-1,:,:], seq_tensor_output_future.view(seq_len, batch, self.num_directions, self.hidden_dim)[-1,:,:]), -1)
+        #seq_tensor_output_sum = torch.cat((seq_tensor_output_previous.view(seq_len, batch, self.num_directions, self.hidden_dim)[-1,:,:], seq_tensor_output_future.view(seq_len, batch, self.num_directions, self.hidden_dim)[-1,:,:]), -1)
         #TODO Attention mechanism
-        seq_tensor_output_sum = seq_tensor_output_sum.view(batch,2*self.num_directions*self.hidden_dim) #2 is because we concatenate previous and future embeddings
+        #seq_tensor_output_sum = seq_tensor_output_sum.view(batch,2*self.num_directions*self.hidden_dim) #2 is because we concatenate previous and future embeddings
+        
+        #TODO GERER LE BI-LSTM self.num_directions
+        m_p = attention_vector(seq_tensor_output_previous, seq_tensor_output_future, previous=True)
+        m_f = attention_vector(seq_tensor_output_future, seq_tensor_output_previous, previous=False)
+        
+        seq_tensor_output_sum = torch.cat((seq_tensor_output_previous[-1,:,:], seq_tensor_output_future[-1,:,:], m_p, m_f), -1) #TODO CONCATENER AUSSI LES 2 SENTENCES EMBEDDINGS CRITIQUES
+        
         #lstm_out, self.hidden = self.lstm(embeds.view(len(sentence), 1, -1), self.hidden)
         for layer in self.linear_layers:
             seq_tensor_output_sum = layer(seq_tensor_output_sum)
@@ -133,7 +167,8 @@ def launch_train(X, Y, words_set, we, taille_embedding, taille_context=3, bidire
 
     vectorized_seqs = [[idx_set_words[w] for w in s]for s in X]
     words_embeddings = create_X(X, vectorized_seqs, device)
-    sentences_embeddings = sentence_embeddings_by_sum(words_embeddings, embed, vectorized_seqs, taille_embedding)
+    words_embeddings = embed(words_embeddings)
+    #sentences_embeddings = sentence_embeddings_by_sum(words_embeddings, embed, vectorized_seqs, taille_embedding)
     Y = create_Y(Y, device)
 
     input_size = taille_embedding
@@ -161,19 +196,17 @@ def launch_train(X, Y, words_set, we, taille_embedding, taille_context=3, bidire
                 #print(i, nb_sentences, taille_context)
                 model.zero_grad()
 
-                # Also, we need to clear out the hidden state of the LSTM,
-                # detaching it from its history on the last instance.
-                model.hidden = model.init_hidden()
-
                 # Step 2. Get our inputs ready for the network, that is, turn them into
                 # Tensors of word indices.
-                indices_previous = torch.tensor(list(range(i,i+taille_context+1)), device=device)
-                indices_future = torch.tensor(list(range(i+2*taille_context+1,i+taille_context,-1)), device=device)
-                input_previous_features = torch.index_select(sentences_embeddings, 0, indices_previous)
-                input_future_features = torch.index_select(sentences_embeddings, 0, indices_future)
-
+                sentences_emb = torch.index_select(words_embeddings, 1, torch.tensor(list(range(i,i+2*taille_context+2)), device=device))
+                
+                # Also, we need to clear out the hidden state of the LSTM,
+                # detaching it from its history on the last instance.
+                model.hidden_sentences = model.init_hidden(batch_size=sentences_emb.shape[1])
+                model.hidden = model.init_hidden()
+        
                 # Step 3. Run our forward pass.
-                prediction = model(input_previous_features, input_future_features)
+                prediction = model(sentences_emb)
 
                 # Step 4. Compute the loss, gradients, and update the parameters by
                 #  calling optimizer.step()
@@ -192,12 +225,11 @@ def launch_train(X, Y, words_set, we, taille_embedding, taille_context=3, bidire
 
 def get_prediction(X, Y, idx_set_words, embed, model, taille_embedding, taille_context=3, device='cpu', is_eval=False):
     if is_eval:
-        model_ = model.eval()
-    else:
-        model_ = model
+        model = model.eval()
     vectorized_seqs = [[idx_set_words[w] for w in s]for s in X]
     words_embeddings = create_X(X, vectorized_seqs, device)
-    sentences_embeddings = sentence_embeddings_by_sum(words_embeddings, embed, vectorized_seqs, taille_embedding)
+    words_embeddings = embed(words_embeddings)
+    #sentences_embeddings = sentence_embeddings_by_sum(words_embeddings, embed, vectorized_seqs, taille_embedding)
     Y = create_Y(Y, device)
     nb_sentences = len(vectorized_seqs)
     #print('nb_sentences', nb_sentences)
@@ -209,11 +241,10 @@ def get_prediction(X, Y, idx_set_words, embed, model, taille_embedding, taille_c
         Y_positives = []
         Y_negatives = []
         for i in iter_sentences:
-            indices_previous = torch.tensor(list(range(i,i+taille_context+1)), device=device)
-            indices_future = torch.tensor(list(range(i+2*taille_context+1,i+taille_context,-1)), device=device)
-            input_previous_features = torch.index_select(sentences_embeddings, 0, indices_previous)
-            input_future_features = torch.index_select(sentences_embeddings, 0, indices_future)
-            prediction = model_(input_previous_features, input_future_features).item()
+            sentences_emb = torch.index_select(words_embeddings, 1, torch.tensor(list(range(i,i+2*taille_context+2)), device=device))
+            model.hidden_sentences = model.init_hidden(batch_size=sentences_emb.shape[1])
+            model.hidden = model.init_hidden()
+            prediction = model(sentences_emb).item()
             ref = Y[i+taille_context].item()
             if i < 30:
                 print(prediction, ref, abs(ref - prediction))
