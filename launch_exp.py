@@ -5,7 +5,7 @@ import numpy as np
 import torch
 
 device = 'cuda:0'
-is_trained = False
+is_trained = True
 
 X_train, Y_train, X_dev, Y_dev, X_test, Y_test, words_set, we = data.load_data()
 taille_embedding = len(we.vectors[we.stoi[X_train[0][0][0]]])
@@ -16,6 +16,6 @@ if is_trained:
 else:
     np.save('losses.npy', np.asarray(losses))
 
-#model.get_prediction(X_train, Y_train, idx_set_words, embed, model_trained, taille_embedding, taille_context=3, device=device, is_eval=True)
-#model.get_prediction(X_dev, Y_dev, idx_set_words, embed, model_trained, taille_embedding, taille_context=3, device=device, is_eval=True)
-#model.get_prediction(X_test, Y_test, idx_set_words, embed, model_trained, taille_embedding, taille_context=3, device=device, is_eval=True)
+model.get_predictions(X_train, Y_train, idx_set_words, embed, model_trained, taille_embedding, taille_context=3, device=device, is_eval=True)
+#model.get_predictions(X_dev, Y_dev, idx_set_words, embed, model_trained, taille_embedding, taille_context=3, device=device, is_eval=True)
+#model.get_predictions(X_test, Y_test, idx_set_words, embed, model_trained, taille_embedding, taille_context=3, device=device, is_eval=True)

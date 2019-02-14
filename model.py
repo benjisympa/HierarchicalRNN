@@ -147,7 +147,7 @@ def create_X(X, vectorized_seqs, device):
 
 def sentence_embeddings_by_sum(words_embeddings, embed, vectorized_seqs, taille_embedding):
     # embed your sequences
-    seq_tensor = embed(words_embeddings)
+    seq_tensor = words_embeddings#embed(words_embeddings)
 
     # sum over L, all words per sentence
     seq_tensor_sumed = torch.sum(seq_tensor, dim=0) #len(vectorized_seqs), taille_embedding
@@ -236,7 +236,7 @@ def launch_train(X_all, Y_all, words_set, we, taille_embedding, taille_context=3
     print('fin train')
     return idx_set_words, embed, model, losses
 
-def get_prediction(X, Y, idx_set_words, embed, model, taille_embedding, taille_context=3, device='cpu', is_eval=False):
+def get_one_prediction(X, Y, idx_set_words, embed, model, taille_embedding, taille_context=3, device='cpu', is_eval=False):
     if is_eval:
         model = model.eval()
     vectorized_seqs = [[idx_set_words[w] for w in s]for s in X]
@@ -265,12 +265,17 @@ def get_prediction(X, Y, idx_set_words, embed, model, taille_embedding, taille_c
                 Y_positives.append(prediction)
             elif ref == 0:
                 Y_negatives.append(prediction)
-            if abs(ref - prediction) >= 0.5:
-                error_global += 1
-        error_global /= len(iter_sentences)
-        print('error_global', error_global)
-        Y_positives = np.asarray(Y_positives)
-        Y_negatives = np.asarray(Y_negatives)
-        np.save('Y_positives.npy', Y_positives)
-        np.save('Y_negatives.npy', Y_negatives)
-        print(np.mean(Y_positives), np.mean(Y_negatives), np.mean(Y_positives) - np.mean(Y_negatives))
+        return Y_positives, Y_negatives
+
+def get_predictions(X_all, Y_all, idx_set_words, embed, model, taille_embedding, taille_context=3, device='cpu', is_eval=False):
+    Y_positives_all = []
+    Y_negatives_all = []
+    for X,Y in zip(X_all,Y_all):
+        Y_positives, Y_negatives = get_one_prediction(X, Y, idx_set_words, embed, model, taille_embedding, taille_context=taille_context, device=device, is_eval=is_eval)
+        Y_positives_all += Y_positives
+        Y_negatives_all += Y_negatives
+    Y_positives_all = np.asarray(Y_positives_all)
+    Y_negatives_all = np.asarray(Y_negatives_all)
+    np.save('Y_positives.npy', Y_positives_all)
+    np.save('Y_negatives.npy', Y_negatives_all)
+    print(np.mean(Y_positives_all), np.mean(Y_negatives_all), np.mean(Y_positives_all) - np.mean(Y_negatives_all))
