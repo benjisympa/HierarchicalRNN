@@ -51,27 +51,29 @@ def analogy(w1, w2, w3, n=5, filter_given=True):
 
     print_tuples(closest_words[:n])
 
-def load_data(path_transcripts='/vol/work2/galmant/transcripts/'):
+def load_data(path_transcripts='/vol/work2/galmant/transcripts/', type_sentence_embedding='lstm'):
     punctuations_end_sentence = ['.', '?', '!']
 
-    we = vocab.FastText(language='en')
-    '''
-    pretrained_aliases = {
-        "charngram.100d": partial(CharNGram),
-        "fasttext.en.300d": partial(FastText, language="en"),
-        "fasttext.simple.300d": partial(FastText, language="simple"),
-        "glove.42B.300d": partial(GloVe, name="42B", dim="300"),
-        "glove.840B.300d": partial(GloVe, name="840B", dim="300"),
-        "glove.twitter.27B.25d": partial(GloVe, name="twitter.27B", dim="25"),
-        "glove.twitter.27B.50d": partial(GloVe, name="twitter.27B", dim="50"),
-        "glove.twitter.27B.100d": partial(GloVe, name="twitter.27B", dim="100"),
-        "glove.twitter.27B.200d": partial(GloVe, name="twitter.27B", dim="200"),
-        "glove.6B.50d": partial(GloVe, name="6B", dim="50"),
-        "glove.6B.100d": partial(GloVe, name="6B", dim="100"),
-        "glove.6B.200d": partial(GloVe, name="6B", dim="200"),
-        "glove.6B.300d": partial(GloVe, name="6B", dim="300")
-    }
-    '''
+    we = None
+    if type_sentence_embedding == 'lstm':
+        we = vocab.FastText(language='en')
+        '''
+        pretrained_aliases = {
+            "charngram.100d": partial(CharNGram),
+            "fasttext.en.300d": partial(FastText, language="en"),
+            "fasttext.simple.300d": partial(FastText, language="simple"),
+            "glove.42B.300d": partial(GloVe, name="42B", dim="300"),
+            "glove.840B.300d": partial(GloVe, name="840B", dim="300"),
+            "glove.twitter.27B.25d": partial(GloVe, name="twitter.27B", dim="25"),
+            "glove.twitter.27B.50d": partial(GloVe, name="twitter.27B", dim="50"),
+            "glove.twitter.27B.100d": partial(GloVe, name="twitter.27B", dim="100"),
+            "glove.twitter.27B.200d": partial(GloVe, name="twitter.27B", dim="200"),
+            "glove.6B.50d": partial(GloVe, name="6B", dim="50"),
+            "glove.6B.100d": partial(GloVe, name="6B", dim="100"),
+            "glove.6B.200d": partial(GloVe, name="6B", dim="200"),
+            "glove.6B.300d": partial(GloVe, name="6B", dim="300")
+        }
+        '''
 
     X_all = []
     Y_all = []
@@ -92,20 +94,26 @@ def load_data(path_transcripts='/vol/work2/galmant/transcripts/'):
                     else:
                         sentence += ' '+word
                     old_word = word
-                X_.append(sentence)
-                Y_.append(row[1])
-            X = [s.lower().split() for s in X_]
-            Y = [s.lower() for s in Y_]
-            to_del = []
-            for s in X:
-                for w in s:
-                    if w not in we.stoi:
-                        to_del.append(w)
-            X = [[w for w in s if w not in to_del] for s in X]
-            for s in X:
-                words_set = words_set.union(set(s))
-            X_all.append(X)
-            Y_all.append(Y)
+                if sentence and row[1]:
+                    X_.append(sentence)
+                    Y_.append(row[1])
+            if type_sentence_embedding == 'lstm':
+                X = [s.lower().split() for s in X_]
+                Y = [s.lower() for s in Y_]
+                to_del = []
+                for s in X:
+                    for w in s:
+                        if w not in we.stoi:
+                            to_del.append(w)
+                X = [[w for w in s if w not in to_del] for s in X]
+                for s in X:
+                    words_set = words_set.union(set(s))
+            else:
+                X = X_
+                Y = Y_
+            if len(X)>0 and len(Y)>0:
+                X_all.append(X)
+                Y_all.append(Y)
             assert len(X) == len(Y)
 
     threshold_train_dev = int(len(X_all)*0.8)
