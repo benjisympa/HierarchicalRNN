@@ -15,7 +15,7 @@ def gelu(x):
     return 0.5 * x * (1 + torch.tanh(math.sqrt(2 / math.pi) * (x + 0.044715 * torch.pow(x, 3))))
 
 class HierarchicalBiLSTM_on_sentence_embedding(nn.Module):
-    def __init__(self, embedding_dim, hidden_dim, targset_size, num_layers = 3, bidirectional = False, device='cpu'):
+    def __init__(self, embedding_dim, hidden_dim, targset_size, num_layers = 3, hidden_linear_size = 10, bidirectional = False, device='cpu'):
         super(HierarchicalBiLSTM_on_sentence_embedding, self).__init__()
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
@@ -36,21 +36,28 @@ class HierarchicalBiLSTM_on_sentence_embedding(nn.Module):
         self.lstm_future = self.lstm_future.to(device)
         
         # Attention Layer
-        self.attn_previous = nn.Linear(hidden_dim,hidden_linear_size)
+        self.attn_previous = nn.Linear(2*hidden_dim,hidden_linear_size)
+        self.attn_previous = self.attn_previous.to(device)
         self.alpha_previous = nn.Linear(hidden_linear_size,1)
-        self.attn_future = nn.Linear(hidden_dim,hidden_linear_size)
+        self.alpha_previous = self.alpha_previous.to(device)
+        self.attn_future = nn.Linear(2*hidden_dim,hidden_linear_size)
+        self.attn_future = self.attn_future.to(device)
         self.alpha_future = nn.Linear(hidden_linear_size,1)
+        self.alpha_future = self.alpha_future.to(device)
         self.tanh = nn.Tanh()
         self.softmax = nn.Softmax()
         
         # Hidden state to hidden state
         self.linear_layers = []
-        for _ in range(self.num_layers):
+        '''for _ in range(self.num_layers):
             hidden_layer = nn.Linear(2*self.num_directions*hidden_dim, 2*self.num_directions*hidden_dim, bias=True)
-            self.linear_layers.append(hidden_layer.to(device))
+            self.linear_layers.append(hidden_layer.to(device))'''
+        self.linear_layers.append(nn.Linear(4*self.num_directions*hidden_dim, 2*self.num_directions*hidden_dim, bias=True).to(device))
+        self.linear_layers.append(nn.Linear(2*self.num_directions*hidden_dim, self.num_directions*hidden_dim, bias=True).to(device))
+        self.linear_layers.append(nn.Linear(self.num_directions*hidden_dim, self.num_directions*hidden_dim, bias=True).to(device))
         
         # The linear layer that maps from hidden state space to tag space
-        self.hidden2tag = nn.Linear(2*self.num_directions*hidden_dim, targset_size, bias=True)#2 because we concatenate the both output of the lstm
+        self.hidden2tag = nn.Linear(self.num_directions*hidden_dim, targset_size, bias=True)#2 because we concatenate the both output of the lstm
         self.hidden2tag = self.hidden2tag.to(device)
         self.hidden_sentences = self.init_hidden()
         self.hidden = self.init_hidden()
@@ -62,7 +69,7 @@ class HierarchicalBiLSTM_on_sentence_embedding(nn.Module):
         # The axes semantics are (num_layers, minibatch_size, hidden_dim)
         return (torch.zeros(self.num_layers*self.num_directions, batch_size, self.hidden_dim, device=self.device), torch.zeros(self.num_layers*self.num_directions, batch_size, self.hidden_dim, device=self.device))#, requires_grad=False))
     
-    def attention_vector(seq_tensor_output_p, seq_tensor_output_f, previous=True):
+    def attention_vector(self, seq_tensor_output_p, seq_tensor_output_f, previous=True):
         similarity = torch.cat((seq_tensor_output_p[-1,:,:].repeat(seq_tensor_output_f.shape[0],1,1), seq_tensor_output_f[:,:,:]), 2)
         if previous:
             similarity_ = self.tanh(self.attn_previous(similarity))
@@ -71,7 +78,7 @@ class HierarchicalBiLSTM_on_sentence_embedding(nn.Module):
             similarity_ = self.tanh(self.attn_future(similarity))
             alpha_ = self.alpha_future(similarity_).squeeze()
         alpha_ = self.softmax(alpha_)
-        m = torch.matmul(seq_tensor_output_future.transpose(0,2), alpha_).transpose(0,1)
+        m = torch.matmul(seq_tensor_output_f.transpose(0,2), alpha_).transpose(0,1)
         return m
 
     def forward(self, sentences_emb):
@@ -90,8 +97,8 @@ class HierarchicalBiLSTM_on_sentence_embedding(nn.Module):
         #seq_tensor_output_sum = seq_tensor_output_sum.view(batch,2*self.num_directions*self.hidden_dim) #2 is because we concatenate previous and future embeddings
         
         #TODO GERER LE BI-LSTM self.num_directions
-        m_p = attention_vector(seq_tensor_output_previous, seq_tensor_output_future, previous=True)
-        m_f = attention_vector(seq_tensor_output_future, seq_tensor_output_previous, previous=False)
+        m_p = self.attention_vector(seq_tensor_output_previous, seq_tensor_output_future)
+        m_f = self.attention_vector(seq_tensor_output_future, seq_tensor_output_previous, previous=False)
         
         seq_tensor_output_sum = torch.cat((seq_tensor_output_previous[-1,:,:], seq_tensor_output_future[-1,:,:], m_p, m_f), -1) #TODO CONCATENER AUSSI LES 2 SENTENCES EMBEDDINGS CRITIQUES
         
@@ -150,7 +157,7 @@ def sentence_embeddings_by_sum(words_embeddings, embed, vectorized_seqs, taille_
     #print('sum', seq_tensor_sumed)
     return seq_tensor_sumed
 
-def launch_train(X, Y, words_set, we, taille_embedding, taille_context=3, bidirectional=False, num_layers=3, nb_epoch=5, targset_size=1, device='cpu', is_trained=False):
+def launch_train(X_all, Y_all, words_set, we, taille_embedding, taille_context=3, bidirectional=False, num_layers=3, nb_epoch=5, targset_size=1, device='cpu', is_trained=False):
     #https://gist.github.com/Tushar-N/dfca335e370a2bc3bc79876e6270099e
 
     ### Premier modèle, somme des embedding par phrases
@@ -164,27 +171,31 @@ def launch_train(X, Y, words_set, we, taille_embedding, taille_context=3, bidire
     embed.weight.data.copy_(we.vectors[we_idx])
     embed.weight.requires_grad = False
     embed = embed.to(device)
-
-    vectorized_seqs = [[idx_set_words[w] for w in s]for s in X]
-    words_embeddings = create_X(X, vectorized_seqs, device)
-    words_embeddings = embed(words_embeddings)
-    #sentences_embeddings = sentence_embeddings_by_sum(words_embeddings, embed, vectorized_seqs, taille_embedding)
-    Y = create_Y(Y, device)
-
+    
     input_size = taille_embedding
     hidden_size = taille_embedding
-    nb_sentences = len(vectorized_seqs)
-
-    model = HierarchicalBiLSTM_on_sentence_embedding(taille_embedding, taille_embedding, targset_size, num_layers, bidirectional, device=device)
+    
+    model = HierarchicalBiLSTM_on_sentence_embedding(taille_embedding, taille_embedding, targset_size, num_layers, bidirectional=bidirectional, device=device)
     model = model.to(device)
     loss_function = nn.BCELoss()#NLLLoss()
     optimizer = optim.SGD(model.parameters(), lr=0.0005)
-    
+
     if is_trained:
         return idx_set_words, embed, model, None
-    else:
-        print('début train')
-        losses = []
+    
+    print('début train')
+    season_episode = 0
+    losses = []
+    for X_,Y_ in zip(X_all,Y_all):
+        print('file ',season_episode)
+        vectorized_seqs = [[idx_set_words[w] for w in s]for s in X_]
+        words_embeddings = create_X(X_, vectorized_seqs, device)
+        words_embeddings = embed(words_embeddings)
+        #sentences_embeddings = sentence_embeddings_by_sum(words_embeddings, embed, vectorized_seqs, taille_embedding)
+        Y = create_Y(Y_, device)
+
+        nb_sentences = len(vectorized_seqs)
+
         for epoch in range(nb_epoch):
             #get mini-batch
             #Data loader
@@ -199,12 +210,12 @@ def launch_train(X, Y, words_set, we, taille_embedding, taille_context=3, bidire
                 # Step 2. Get our inputs ready for the network, that is, turn them into
                 # Tensors of word indices.
                 sentences_emb = torch.index_select(words_embeddings, 1, torch.tensor(list(range(i,i+2*taille_context+2)), device=device))
-                
+
                 # Also, we need to clear out the hidden state of the LSTM,
                 # detaching it from its history on the last instance.
                 model.hidden_sentences = model.init_hidden(batch_size=sentences_emb.shape[1])
                 model.hidden = model.init_hidden()
-        
+
                 # Step 3. Run our forward pass.
                 prediction = model(sentences_emb)
 
@@ -218,10 +229,12 @@ def launch_train(X, Y, words_set, we, taille_embedding, taille_context=3, bidire
                 #break
             print(loss)
             losses.append(losses_)
+            #model.get_prediction(X_, Y_, idx_set_words, embed, model, taille_embedding, taille_context=taille_context, device=device)
             #break
-        print('fin train')
+        season_episode += 1
         torch.save(model.state_dict(), '/people/maurice/HierarchicalRNN/last_model.pth.tar')
-        return idx_set_words, embed, model, losses
+    print('fin train')
+    return idx_set_words, embed, model, losses
 
 def get_prediction(X, Y, idx_set_words, embed, model, taille_embedding, taille_context=3, device='cpu', is_eval=False):
     if is_eval:
