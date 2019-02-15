@@ -9,6 +9,7 @@ import torchtext.vocab as vocab
 import numpy as np
 import matplotlib.pyplot as plt
 import nltk
+import math
 from models import InferSent
 
 # Set the random seed manually for reproducibility.
@@ -129,7 +130,7 @@ class HierarchicalBiLSTM_on_sentence_embedding(nn.Module):
             seq_tensor_output_sum = torch.tanh(seq_tensor_output_sum)
         tag_space = self.hidden2tag(seq_tensor_output_sum)
         tag_space = tag_space[0]
-        prediction = torch.sigmoid(tag_space)
+        prediction = tag_space#torch.sigmoid(tag_space)
         #print(tag_space, tag_space.clamp(min=0), torch.tanh(tag_space), prediction)
         return prediction
 
@@ -199,12 +200,18 @@ def launch_train(X_all, Y_all, words_set, we, taille_embedding, hidden_size=300,
         embed.weight.data.copy_(we.vectors[we_idx])
         embed.weight.requires_grad = False
         embed = embed.to(device)
+        dim = 1
+    else:
+        dim = 0
     
     model = HierarchicalBiLSTM_on_sentence_embedding(taille_embedding, hidden_size, targset_size, num_layers, bidirectional=bidirectional, device=device, type_sentence_embedding=type_sentence_embedding)
     model = model.to(device)
-    criterion = nn.BCELoss()#NLLLoss()
-    optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
-    scheduler = StepLR(optimizer, step_size=int(nb_epoch/5), gamma=0.2)
+    #model = torch.nn.DataParallel(model, dim=dim)#, device_ids=[0, 1, 2])
+    #pos_weight = torch.FloatTensor(len(negatives)/len(positives))
+    #pos_weight = pos_weight.to(device)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=None)#pos_weight)#BCELoss()#NLLLoss()
+    optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9, nesterov=True)
+    #scheduler = StepLR(optimizer, step_size=math.ceil(nb_epoch/5), gamma=0.2)
 
     if is_trained:
         return idx_set_words, embed, model, None
@@ -235,7 +242,7 @@ def launch_train(X_all, Y_all, words_set, we, taille_embedding, hidden_size=300,
             #Data loader
             print('epoch',epoch,'on',nb_epoch,'file',season_episode,'on',len(X_all))
             losses_ = []
-            scheduler.step(epoch)
+            #scheduler.step(epoch)
             for i in range(nb_sentences - (2*taille_context + 1)):
                 # Step 1. Remember that Pytorch accumulates gradients.
                 # We need to clear them out before each instance
@@ -273,7 +280,7 @@ def launch_train(X_all, Y_all, words_set, we, taille_embedding, hidden_size=300,
             #break
         season_episode += 1
         torch.save(model.state_dict(), '/people/maurice/HierarchicalRNN/last_model.pth.tar')
-        break
+        #break
     print('fin train')
     print('mean poucentages majority class', sum(poucentages_majority_class)/len(poucentages_majority_class))
     return idx_set_words, embed, model, losses

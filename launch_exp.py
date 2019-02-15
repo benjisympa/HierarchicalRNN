@@ -15,7 +15,7 @@ if type_sentence_embedding == 'lstm':
 else:
     taille_embedding = 4096
 
-idx_set_words, embed, model_trained, losses = model.launch_train(X_train, Y_train, words_set, we, taille_embedding, hidden_size=hidden_size, taille_context=3, bidirectional=False, num_layers=1, nb_epoch=300, targset_size=1, device=device, is_trained=is_trained, type_sentence_embedding=type_sentence_embedding)
+idx_set_words, embed, model_trained, losses = model.launch_train(X_train, Y_train, words_set, we, taille_embedding, hidden_size=hidden_size, taille_context=3, bidirectional=False, num_layers=1, nb_epoch=100, targset_size=1, device=device, is_trained=is_trained, type_sentence_embedding=type_sentence_embedding)
 if is_trained:
     model_trained.load_state_dict(torch.load('/people/maurice/HierarchicalRNN/last_model.pth.tar'))
 else:
