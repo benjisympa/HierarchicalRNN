@@ -68,7 +68,11 @@ def analogy(w1, w2, w3, n=5, filter_given=True):
 
     print_tuples(closest_words[:n])
 
-def load_data(path_transcripts='/vol/work2/galmant/transcripts/', type_sentence_embedding='lstm'):
+def load_data(config, path_transcripts='/vol/work2/galmant/transcripts/'):
+    type_sentence_embedding = config['type_sentence_embedding']
+    dev_set_list = config['dev_set_list']
+    test_set_list = config['test_set_list']
+    
     punctuations_end_sentence = ['.', '?', '!']
 
     we = None
@@ -92,11 +96,19 @@ def load_data(path_transcripts='/vol/work2/galmant/transcripts/', type_sentence_
         }
         '''
 
-    X_all = []
-    Y_all = []
+    #X_all = []
+    #Y_all = []
+    X_train = []
+    Y_train = []
+    X_dev = []
+    Y_dev = []
+    X_test = []
+    Y_test = []
     words_set = set()
-    for f in sorted(glob.glob(path_transcripts+'*')):
-        with open(f, newline='') as csvfile:
+    for file in sorted(glob.glob(path_transcripts+'*')):
+        #TEST
+        #for file in [sorted(glob.glob(path_transcripts+'*'))[0]]:
+        with open(file, newline='') as csvfile:
             reader = csv.reader(csvfile, delimiter=' ', quotechar='|')
             X_ = []
             Y_ = []
@@ -130,18 +142,33 @@ def load_data(path_transcripts='/vol/work2/galmant/transcripts/', type_sentence_
                 X = X_
                 Y = Y#_
             if len(X)>0 and len(Y)>0:
-                X_all.append(X)
-                Y_all.append(Y)
+                names_episode = file.split('/')[-1]
+                names_season = '.'.join(names_episode.split('.')[:-1])
+                names_serie = '.'.join(names_episode.split('.')[0])
+                if names_episode in dev_set_list or names_season in dev_set_list or names_serie in dev_set_list:
+                    X_dev.append(X)
+                    Y_dev.append(Y)
+                elif names_episode in test_set_list or names_season in test_set_list or names_serie in test_set_list:
+                    X_test.append(X)
+                    Y_test.append(Y)
+                else:
+                    X_train.append(X)
+                    Y_train.append(Y)
             assert len(X) == len(Y)
 
-    threshold_train_dev = int(len(X_all)*0.8)
+    '''threshold_train_dev = int(len(X_all)*0.8)
     threshold_dev_test = threshold_train_dev + int(len(X_all)*0.1)
     X_train = X_all[:threshold_train_dev]
     Y_train = Y_all[:threshold_train_dev]
     X_dev = X_all[threshold_train_dev:threshold_dev_test]
     Y_dev = Y_all[threshold_train_dev:threshold_dev_test]
     X_test = X_all[threshold_dev_test:]
-    Y_test = Y_all[threshold_dev_test:]
+    Y_test = Y_all[threshold_dev_test:]'''
+    #TEST
+    #X_train = X_test
+    #Y_train = Y_test
+    #X_dev = X_test
+    #Y_dev = Y_test
     return X_train, Y_train, X_dev, Y_dev, X_test, Y_test, words_set, we
 
 def get_size(obj, seen=None):
@@ -201,37 +228,63 @@ def create_X(X, vectorized_seqs, device):
     seq_tensor = seq_tensor.to(device)
     return seq_tensor
 
-def split_by_context(X, Y, taille_context, batch_size, device='cpu'): #(8..,1,4096)
+def split_by_context(config, X, Y, shuffled=False, device='cpu'): #(8..,1,4096)
+    taille_context = config['taille_context']
+    batch_size = config['batch_size']
     list_tensors_X = []
     list_tensors_Y = []
-    for i in range(X.shape[0] - (2*taille_context + 1)): #NOT 1 NOW 0 FOR THE NUMBER OF SENTENCES
-        list_tensors_X.append(torch.index_select(X, 0, torch.tensor(list(range(i,i+2*(taille_context+1))), device=device))) #(8,1,4096)
-        list_tensors_Y.append(torch.index_select(Y, 0, torch.tensor([taille_context], device=device))) #(1)
-    tensor_split_X = torch.stack(list_tensors_X).transpose(0,1).view(2*(taille_context+1),-1,X.shape[-1]) #(n-8,8,1,4096) -> (8,n,1,4096) -> (8,n,4096)
-    tensor_split_Y = torch.stack(list_tensors_Y).view(1,-1)#.squeeze(0) #.transpose(0,1) #(n,1) -> (1,n)
+    #X 357 torch.Size([34, 357, 300]) Il y a 357 phrases de 34 mots max par phrase
+    #print(X.size(), Y.size()) #torch.Size([34, 357, 300]) torch.Size([356, 1])
     minis_batch_X = {}
     minis_batch_Y = {}
-    nb_batches = int(tensor_split_X.shape[1]/batch_size)
-    for i in range(nb_batches):
-        minis_batch_X[i] = tensor_split_X[:,i*batch_size:(i+1)*batch_size,:]
-        minis_batch_Y[i] = tensor_split_Y[:,i*batch_size:(i+1)*batch_size]
-    minis_batch_X[nb_batches] = tensor_split_X[:,nb_batches*batch_size:,:] #n/32 tensors of (8,32,4096)
-    minis_batch_Y[nb_batches] = tensor_split_Y[:,nb_batches*batch_size:] #n/32 tensors of (1,32)
-    shuffle_ids = sample(list(range(nb_batches+1)), k=nb_batches+1) #Shuffled inside an episode
-    return [minis_batch_X[i] for i in shuffle_ids], [minis_batch_Y[i] for i in shuffle_ids]
+    if config['type_sentence_embedding'] == 'infersent':
+        for i in range(X.shape[0] - (2*taille_context + 1) + 1): #NOT 1 NOW 0 FOR THE NUMBER OF SENTENCES # NEW + 1 dans le range
+            list_tensors_X.append(torch.index_select(X, 0, torch.tensor(list(range(i,i+2*(taille_context+1))), device=device))) #(8,1,4096)
+            list_tensors_Y.append(torch.index_select(Y, 0, torch.tensor([i+taille_context], device=device))) #(1)
+        #list_tensors_X[0] torch.Size([8, 34, 300])
+        #torch.stack(list_tensors_X).transpose(0,1) torch.Size([8, 350, 34, 300])
+        tensor_split_X = torch.stack(list_tensors_X).transpose(0,1).view(2*(taille_context+1),-1,X.shape[-1]) #(n-8,8,1,4096) -> (8,n,1,4096) -> (8,n,4096)
+        tensor_split_Y = torch.stack(list_tensors_Y).view(1,-1)#.squeeze(0) #.transpose(0,1) #(n,1) -> (1,n)
+        nb_batches = int(tensor_split_X.shape[1]/batch_size)
+        for i in range(nb_batches):
+            minis_batch_X[i] = tensor_split_X[:,i*batch_size:(i+1)*batch_size,:]
+            minis_batch_Y[i] = tensor_split_Y[:,i*batch_size:(i+1)*batch_size]
+        minis_batch_X[nb_batches] = tensor_split_X[:,nb_batches*batch_size:,:] #n/32 tensors of (8,32,4096)
+        minis_batch_Y[nb_batches] = tensor_split_Y[:,nb_batches*batch_size:] #n/32 tensors of (1,32)
+    else:
+        #print(Y[0]) #tensor([1.])
+        Y = Y.transpose(0,1) #torch.Size([356])
+        #print(Y.size()) #torch.Size([1, 340])
+        nb_batches = int(X.shape[1]/batch_size)
+        for i in range(nb_batches):
+            minis_batch_X[i] = X[:,i*batch_size:(i+1)*batch_size,:]
+            minis_batch_Y[i] = Y[:,i*batch_size:(i+1)*batch_size]
+        if X.shape[1]-(nb_batches*batch_size) >= 2*(taille_context+1):
+            minis_batch_X[nb_batches] = X[:,nb_batches*batch_size:,:] #n/32 tensors of (8,32,4096)
+            minis_batch_Y[nb_batches] = Y[:,nb_batches*batch_size:] #n/32 tensors of (1,32)
+        else:
+            minis_batch_X[nb_batches] = X[:,nb_batches*batch_size-(2*(taille_context+1)-(X.shape[1]-(nb_batches*batch_size))):,:] #n/32 tensors of (8,32,4096)
+            minis_batch_Y[nb_batches] = Y[:,nb_batches*batch_size-(2*(taille_context+1)-(X.shape[1]-(nb_batches*batch_size))):] #n/32 tensors of (1,32)
+        #print(X[:,nb_batches*batch_size:,:].size(), Y[:,nb_batches*batch_size:].size()) #torch.Size([49, 6, 300]) torch.Size([1, 5])
+    shuffle_ids = list(range(nb_batches+1))
+    if shuffled:
+        shuffle_ids = sample(list(range(nb_batches+1)), k=nb_batches+1) #Shuffled inside an episode
+    return [minis_batch_X[i] for i in shuffle_ids], [minis_batch_Y[i] for i in shuffle_ids] #(L,B,D) -> (n/32,109,32,300)=(n/32,109,8,300) 109: nb de mots max par phrase
 
-def pre_calculate_features(X_all, Y_all, output_path, type_sentence_embedding, idx_set_words, embed, taille_context, batch_size, device='cpu'):
+def pre_calculate_features(config, X_all, Y_all, output_path, idx_set_words, embed, shuffled=False, device='cpu'):
     # Concatenate all the datas in pytorch lists of tensors and create the mini-batch (8,32,4096) or (109,8*32,300)
     season_episode = 0
     poucentages_majority_class = []
     #inputs_embeddings = {}
     #outputs_refs = {}
-    shuffle_ids_episodes = sample(list(range(len(X_all))), k=len(X_all)) #Shuffled between each episode
+    shuffle_ids_episodes = list(range(len(X_all)))
+    if shuffled:
+        shuffle_ids_episodes = sample(list(range(len(X_all))), k=len(X_all)) #Shuffled between each episode
     for id_ in shuffle_ids_episodes:#zip(X_all,Y_all):
         X_ = X_all[id_]
         Y_ = Y_all[id_]
         print('file',season_episode+1,'on',len(X_all))
-        if type_sentence_embedding == 'lstm':
+        if config['type_sentence_embedding'] == 'lstm':
             vectorized_seqs = [[idx_set_words[w] for w in s]for s in X_]
             words_embeddings = create_X(X_, vectorized_seqs, device)
             words_embeddings = embed(words_embeddings)
@@ -243,13 +296,14 @@ def pre_calculate_features(X_all, Y_all, output_path, type_sentence_embedding, i
         #words_embeddings : (8..,1,4096) or (109,8..,300); 8.. -> number of sentences, 8 -> context size, 109 -> max number of words per sentence, 300 or 4096 -> embeddings size
         Y, poucentage_majority_class = create_Y(Y_, device) #(8..)
         #TODO CURRENTLY ONLY FOR INFERSENT
-        inputs_embeddings_, outputs_refs_ = split_by_context(words_embeddings, Y, taille_context, batch_size, device=device) #(n/32,8,32,4096) and (n/32,1,32)
+        inputs_embeddings_, outputs_refs_ = split_by_context(config, words_embeddings, Y, shuffled=shuffled, device=device) #(n/32,8,32,4096) and (n/32,1,32)
         #inputs_embeddings[season_episode] = inputs_embeddings_
         #outputs_refs[season_episode] = outputs_refs_
         
-        if inputs_embeddings_.shape[0] > 0: #TODO il y a des tensors vide, par exemple le 142ème en partant de 0
-            torch.save(inputs_embeddings_, output_path+'inputs_embeddings_'+str(season_episode)+'.pickle')
-            torch.save(outputs_refs_, output_path+'outputs_refs_'+str(season_episode)+'.pickle')
+        #if inputs_embeddings_.shape[0] > 0: #TODO il y a des tensors vide, par exemple le 142ème en partant de 0
+        #Il faudrait itérer sur chacun des tenseurs de inputs_embeddings_ et les supprimer de la liste si ils sont vides
+        torch.save(inputs_embeddings_, output_path+'inputs_embeddings_'+str(season_episode)+'.pickle')
+        torch.save(outputs_refs_, output_path+'outputs_refs_'+str(season_episode)+'.pickle')
         '''with open(output_path+'inputs_embeddings_'+str(season_episode)+'.pickle', 'wb') as handle:
             pickle.dump(inputs_embeddings_, handle, protocol=pickle.HIGHEST_PROTOCOL)
         with open(output_path+'outputs_refs_'+str(season_episode)+'.pickle', 'wb') as handle:
@@ -274,14 +328,14 @@ def pre_calculate_features(X_all, Y_all, output_path, type_sentence_embedding, i
     with open(output_path+'outputs_refs.pickle', 'wb') as handle:
         pickle.dump(outputs_refs_shuffled, handle, protocol=pickle.HIGHEST_PROTOCOL)'''
 
-def get_features(X_all, Y_all, output_path, words_set, we, taille_embedding, type_sentence_embedding, taille_context, batch_size, device='cpu'):
+def get_features(config, X_all, Y_all, output_path, words_set, we, shuffled=False, device='cpu'):
     idx_set_words = None
     embed = None
-    if type_sentence_embedding == 'lstm':
+    if config['type_sentence_embedding'] == 'lstm':
         idx_set_words = dict(zip(list(words_set), range(1,len(words_set)+1)))
         idx_set_words['<PAD>'] = 0 #for padding we need to intialize one row of vector weights
         padding_idx = idx_set_words['<PAD>']
-        embed = torch.nn.Embedding(num_embeddings=len(words_set)+1, embedding_dim=taille_embedding, padding_idx=padding_idx)
+        embed = torch.nn.Embedding(num_embeddings=len(words_set)+1, embedding_dim=config['taille_embedding'], padding_idx=padding_idx)
         we_idx = [0] #for padding we need to intialize one row of vector weights
         we_idx += [we.stoi[w] for w in list(words_set)]
         embed.weight.data.copy_(we.vectors[we_idx])
@@ -291,4 +345,4 @@ def get_features(X_all, Y_all, output_path, words_set, we, taille_embedding, typ
     else:
         dim = 0
     
-    pre_calculate_features(X_all, Y_all, output_path, type_sentence_embedding, idx_set_words, embed, taille_context, batch_size, device=device)
+    pre_calculate_features(config, X_all, Y_all, output_path, idx_set_words, embed, shuffled=shuffled, device=device)
