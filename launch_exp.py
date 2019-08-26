@@ -5,8 +5,9 @@ import numpy as np
 import torch
 import pathlib
 import glob
+import datetime
 
-use_pre_trained_features = False#True
+use_pre_trained_features = False#True#False#True
 launch_train = True
 restart_at_epoch = 0#996
 
@@ -21,7 +22,7 @@ config = {}
 config['dev_set_list']=['TheBigBangTheory.Season02']
 config['test_set_list']=['TheBigBangTheory.Season01']
 config['device'] = 'cpu'
-gpu = 'cuda:1'#0
+gpu = 'cuda:0'#0
 if launch_train:
     config['device'] = gpu
 #pre_load_data = False
@@ -29,15 +30,15 @@ config['type_sentence_embedding']='lstm'#'infersent'
 subset_data = 'big_bang_theory_:'
 path_save = '/vol/work3/maurice/HierarchicalRNN/'
 config['hidden_size'] = 300
-config['batch_size'] = 32 #Should be a multiple of the taille_context for the LSTM model
+config['batch_size'] = 32 #Should be a multiple of the taille_context for the LSTM model ; multiple of 2*(taille_context + 1)
 config['taille_context'] = 3
-config['targset_size'] = 1
+config['target_size'] = 1
 config['hidden_linear_size'] = 10
 config['num_layers'] = 1
 config['dp_ratio'] = 0.5
 config['nb_epoch'] = 10000
 config['bidirectional'] = False
-exp_name = 'context_'+str(config['taille_context'])+'_hidden-size_'+str(config['hidden_size'])+'_hidden-linear-size_'+str(config['hidden_linear_size'])+'_num-layers_'+str(config['num_layers'])+'_dp-ratio_'+str(config['dp_ratio'])+'_bidirectional_'+str(config['bidirectional'])
+exp_name = 'context_'+str(config['taille_context'])+'_hidden-size_'+str(config['hidden_size'])+'_hidden-linear-size_'+str(config['hidden_linear_size'])+'_num-layers_'+str(config['num_layers'])+'_dp-ratio_'+str(config['dp_ratio'])+'_bidirectional_'+str(config['bidirectional'])+'_'+datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S").replace(' ','_')
 
 if config['type_sentence_embedding'] == 'infersent':
     config['taille_embedding'] = 4096
@@ -65,6 +66,7 @@ sub_path = path_save+config['type_sentence_embedding']+'/'+subset_data+'/'+exp_n
 path_model = sub_path+'/'
 path_data = sub_path+'/pre_trained_features'
 path_work = sub_path+'/work/'
+config['path_work'] = path_work
 
 pathlib.Path(sub_path+'/models/').mkdir(parents=True, exist_ok=True)
 pathlib.Path(path_data+'/train/').mkdir(parents=True, exist_ok=True)
@@ -78,13 +80,17 @@ if not use_pre_trained_features:
     X_train, Y_train, X_dev, Y_dev, X_test, Y_test, words_set, we = data.load_data(config)
     if config['type_sentence_embedding'] == 'lstm':
         config['taille_embedding'] = len(we.vectors[we.stoi[X_train[0][0][0]]])
-
+        idx_set_words, embed = data.get_embds(config, words_set, we, device='cpu')
+        
     #Calculate features on CPU
     print('Calculate features on CPU')
     config['device'] = 'cpu'
-    data.get_features(config, X_train, Y_train, path_data+'/train/', words_set, we, shuffled=False)#True)
-    data.get_features(config, X_dev, Y_dev, path_data+'/dev/', words_set, we, shuffled=False)
-    data.get_features(config, X_test, Y_test, path_data+'/test/', words_set, we, shuffled=False)
+    data.pre_calculate_features(config, X_train, Y_train, path_data+'/train/', idx_set_words, embed, shuffled=False)
+    data.pre_calculate_features(config, X_dev, Y_dev, path_data+'/dev/', idx_set_words, embed, shuffled=False)
+    data.pre_calculate_features(config, X_test, Y_test, path_data+'/test/', idx_set_words, embed, shuffled=False)
+    #data.get_features(config, X_train, Y_train, path_data+'/train/', words_set, we, shuffled=False)#True)
+    #data.get_features(config, X_dev, Y_dev, path_data+'/dev/', words_set, we, shuffled=False)
+    #data.get_features(config, X_test, Y_test, path_data+'/test/', words_set, we, shuffled=False)
 else:
     config['taille_embedding'] = 300
 
@@ -99,7 +105,7 @@ if restart_at_epoch > 0:
 if launch_train:
     #Launch train on GPU
     print('Launch train on GPU')
-    losses = Model.launch_train(model, path_model, path_data+'/train/', path_data+'/dev/', nb_epoch=config['nb_epoch'], device=config['device'], type_sentence_embedding=config['type_sentence_embedding'], restart_at_epoch=restart_at_epoch)
+    losses = Model.launch_train(config, model, path_model, path_data+'/train/', path_data+'/dev/', nb_epoch=config['nb_epoch'], device=config['device'], type_sentence_embedding=config['type_sentence_embedding'], restart_at_epoch=restart_at_epoch)
     np.save(path_work+'losses.npy', np.asarray(losses))
 
 #Re-define the model on CPU
